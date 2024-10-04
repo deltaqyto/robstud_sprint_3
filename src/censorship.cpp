@@ -41,7 +41,7 @@ private:
     }
 
     void laser_callback(const sensor_msgs::msg::LaserScan::SharedPtr msg) {
-    std::vector<std::pair<size_t, size_t>> clusters;
+        std::vector<std::pair<size_t, size_t>> clusters;
         std::vector<double> angle_db;
         
         const auto& ranges = msg->ranges;
@@ -76,12 +76,14 @@ private:
         }
 
         std::vector<std::pair<size_t, size_t>> thresholded_clusters;
-        std::vector<double> cluster_average_angles;
+        std::vector<double> cluster_angles;
 
         for (const auto& cluster : clusters) {
             RCLCPP_INFO(this->get_logger(), "Size: %zu", cluster.second);
             if (check_cluster_threshold(msg, cluster)) {
                 thresholded_clusters.push_back(cluster);
+                double avg_angle = calculate_cluster_angle(msg, angle_db, cluster);
+                cluster_angles.push_back(avg_angle);
             }
         }
 
@@ -101,6 +103,21 @@ private:
         double cluster_size = std::sqrt(std::pow(x2 - x1, 2) + std::pow(y2 - y1, 2));
 
         return (cluster_size >= min_cluster_size && cluster_size <= max_cluster_size);
+    }
+
+    double calculate_cluster_angle(const sensor_msgs::msg::LaserScan::SharedPtr& scan,
+                                   const std::vector<double>& angle_db,
+                                   const std::pair<size_t, size_t>& cluster) {
+        size_t start = cluster.first;
+        size_t length = cluster.second;
+        double sum_angles = 0.0;
+
+        for (size_t i = 0; i < length; i++) {
+            size_t index = (start + i) % scan->ranges.size();
+            sum_angles += angle_db[index];
+        }
+
+        return sum_angles / length;
     }
 
     void publish_cylinder_position(double x, double y) {
