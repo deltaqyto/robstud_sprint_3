@@ -19,6 +19,10 @@ protected:
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr scan_map_annotated_pub_;
     rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr cylinder_position_pub_;
 
+    const double object_tolerance = 0.05; // 5 cm discontinuity tolerance
+    const double min_cluster_size = 0.14; // Minimum cluster size
+    const double max_cluster_size = 0.15; // Maximum cluster size
+
 public:
     CensorMatic() : Node("task_planner") {
         odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
@@ -37,7 +41,79 @@ private:
     }
 
     void laser_callback(const sensor_msgs::msg::LaserScan::SharedPtr msg) {
-        // TODO Process cylinders
+    std::vector<std::pair<size_t, size_t>> clusters;
+        std::vector<double> angle_db;
+        
+        const auto& ranges = msg->ranges;
+        const size_t num_points = ranges.size();
+
+        size_t cluster_start = 0;
+        size_t cluster_length = 1;
+        
+        // Determine objects by maximum displacement
+        for (size_t i = 1; i <= num_points; i++) {
+            size_t current = i % num_points;
+            size_t previous = (i - 1) % num_points;
+
+            if (std::abs(ranges[current] - ranges[previous]) <= object_tolerance) {
+                cluster_length++;
+            } else {
+                if (cluster_length > 1) {
+                    clusters.emplace_back(cluster_start, cluster_length);
+                }
+                cluster_start = current;
+                cluster_length = 1;
+            }
+
+            size_t next = (i + 1) % num_points;
+            double angle = std::atan2(ranges[next] * std::sin(msg->angle_increment) - ranges[current] * std::sin(2 * msg->angle_increment),
+                                      ranges[next] * std::cos(msg->angle_increment) - ranges[current] * std::cos(2 * msg->angle_increment));
+            angle_db.push_back(angle);
+        }
+
+        if (cluster_length > 1) {
+            clusters.emplace_back(cluster_start, cluster_length);
+        }
+
+        std::vector<std::pair<size_t, size_t>> thresholded_clusters;
+        std::vector<double> cluster_average_angles;
+
+        for (const auto& cluster : clusters) {
+            RCLCPP_INFO(this->get_logger(), "Size: %zu", cluster.second);
+            if (check_cluster_threshold(msg, cluster)) {
+                thresholded_clusters.push_back(cluster);
+            }
+        }
+
+        RCLCPP_INFO(this->get_logger(), "Matches: %zu", thresholded_clusters.size());
+    }
+
+    bool check_cluster_threshold(const sensor_msgs::msg::LaserScan::SharedPtr& scan,
+                                 const std::pair<size_t, size_t>& cluster) {
+        size_t start = cluster.first;
+        size_t length = cluster.second;
+        size_t end = (start + length - 1) % scan->ranges.size();
+
+        double x1 = scan->ranges[start] * std::cos(scan->angle_min + start * scan->angle_increment);
+        double y1 = scan->ranges[start] * std::sin(scan->angle_min + start * scan->angle_increment);
+        double x2 = scan->ranges[end] * std::cos(scan->angle_min + end * scan->angle_increment);
+        double y2 = scan->ranges[end] * std::sin(scan->angle_min + end * scan->angle_increment);
+        double cluster_size = std::sqrt(std::pow(x2 - x1, 2) + std::pow(y2 - y1, 2));
+
+        return (cluster_size >= min_cluster_size && cluster_size <= max_cluster_size);
+    }
+
+    void publish_cylinder_position(double x, double y) {
+        auto pose_msg = geometry_msgs::msg::Pose();
+        pose_msg.position.x = x;
+        pose_msg.position.y = y;
+        pose_msg.position.z = 0.0;
+        pose_msg.orientation.x = 0.0;
+        pose_msg.orientation.y = 0.0;
+        pose_msg.orientation.z = 0.0;
+        pose_msg.orientation.w = 1.0;
+
+        cylinder_position_pub_->publish(pose_msg);
     }
 
     geometry_msgs::msg::Pose current_pose_;
