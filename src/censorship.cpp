@@ -10,6 +10,7 @@
 #include "geometry_msgs/msg/pose_array.hpp"
 #include "sensor_msgs/msg/laser_scan.hpp"
 #include "sensor_msgs/msg/image.hpp"
+#include "tf2/utils.h"
 
 class CensorMatic : public rclcpp::Node {
 protected:
@@ -92,7 +93,7 @@ private:
                 thresholded_clusters.push_back(cluster);
                 double avg_angle = calculate_cluster_angle(msg, angle_db, cluster);
                 cluster_angles.push_back(avg_angle);
-                //RCLCPP_INFO(this->get_logger(), "Size: %f", avg_angle);
+                RCLCPP_INFO(this->get_logger(), "Curvature: %f", avg_angle);
 
                 // TODO reject based on curvature
 
@@ -102,7 +103,21 @@ private:
                 double angle = msg->angle_min + cluster.first * msg->angle_increment;
                 double x = distance * std::cos(angle);
                 double y = distance * std::sin(angle);
-                append_cylinder_position(x, y);
+
+                double robot_x = current_pose_.position.x;
+                double robot_y = current_pose_.position.y;
+                tf2::Quaternion q(
+                    current_pose_.orientation.x,
+                    current_pose_.orientation.y,
+                    current_pose_.orientation.z,
+                    current_pose_.orientation.w);
+                double robot_yaw = tf2::getYaw(q);
+
+                double x_odom = robot_x + x * std::cos(robot_yaw) - y * std::sin(robot_yaw);
+                double y_odom = robot_y + x * std::sin(robot_yaw) + y * std::cos(robot_yaw);
+
+
+                append_cylinder_position(x_odom, y_odom);
                 RCLCPP_INFO(this->get_logger(), "X:%f Y:%f", x, y);
     
             }
