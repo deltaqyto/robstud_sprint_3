@@ -21,7 +21,7 @@ protected:
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr scan_map_annotated_pub_;
     rclcpp::Publisher<geometry_msgs::msg::PoseArray>::SharedPtr cylinder_positions_pub_;
 
-    const double object_tolerance = 0.05; // 5 cm discontinuity tolerance
+    const double object_tolerance = 0.10; // 10 cm discontinuity tolerance
     const double min_cluster_size = 0.14; // Minimum cluster size
     const double max_cluster_size = 0.30; // Maximum cluster size
 
@@ -88,21 +88,25 @@ private:
             if (cluster.second < 5) {  // Remove fragment items
                 continue;
             }
+            double size = 0;
+            double center_x = 0;
+            double center_y = 0;
             //RCLCPP_INFO(this->get_logger(), "Size: %zu", cluster.second);
-            if (check_cluster_threshold(msg, cluster)) {
+            if (check_cluster_threshold(msg, cluster, size, center_x, center_y)) {
                 thresholded_clusters.push_back(cluster);
                 double avg_angle = calculate_cluster_angle(msg, angle_db, cluster);
                 cluster_angles.push_back(avg_angle);
-                RCLCPP_INFO(this->get_logger(), "Curvature: %f", avg_angle);
-
+                
                 // TODO reject based on curvature
+                if (isnan(avg_angle) || isinf(avg_angle)) {
+                    continue;
+                }
+                //RCLCPP_INFO(this->get_logger(), "Curvature: %f", avg_angle);
 
-
-                // TODO determine center of cluster
                 double distance = msg->ranges[cluster.first];
                 double angle = msg->angle_min + cluster.first * msg->angle_increment;
-                double x = distance * std::cos(angle);
-                double y = distance * std::sin(angle);
+                double x = center_x; //distance * std::cos(angle);
+                double y = center_y; //distance * std::sin(angle);
 
                 double robot_x = current_pose_.position.x;
                 double robot_y = current_pose_.position.y;
@@ -118,7 +122,7 @@ private:
 
 
                 append_cylinder_position(x_odom, y_odom);
-                RCLCPP_INFO(this->get_logger(), "X:%f Y:%f", x, y);
+                RCLCPP_INFO(this->get_logger(), "X:%f Y:%f -> %f", x, y, size);
     
             }
         }
@@ -128,7 +132,8 @@ private:
     }
 
     bool check_cluster_threshold(const sensor_msgs::msg::LaserScan::SharedPtr& scan,
-                                 const std::pair<size_t, size_t>& cluster) {
+                                 const std::pair<size_t, size_t>& cluster, 
+                                 double& size, double& center_x, double& center_y) {
         size_t start = cluster.first;
         size_t length = cluster.second;
         size_t end = (start + length - 1) % scan->ranges.size();
@@ -138,7 +143,11 @@ private:
         double x2 = scan->ranges[end] * std::cos(scan->angle_min + end * scan->angle_increment);
         double y2 = scan->ranges[end] * std::sin(scan->angle_min + end * scan->angle_increment);
         double cluster_size = std::sqrt(std::pow(x2 - x1, 2) + std::pow(y2 - y1, 2));
-        //RCLCPP_INFO(this->get_logger(), "Size: %f", cluster_size);
+        size = cluster_size;
+
+        center_x = (x1 + x2)/2.0;
+        center_y = (y1 + y2)/2.0;
+
         return (cluster_size >= min_cluster_size && cluster_size <= max_cluster_size);
     }
 
@@ -171,7 +180,6 @@ private:
     }
 
     void publish_cylinders() {
-        append_cylinder_position(0, 0);
         cylinder_poses_.header.stamp = this->now();
         cylinder_positions_pub_->publish(cylinder_poses_);
         cylinder_poses_.poses.clear();
