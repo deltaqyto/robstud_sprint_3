@@ -22,8 +22,8 @@ protected:
     rclcpp::Publisher<geometry_msgs::msg::PoseArray>::SharedPtr cylinder_positions_pub_;
 
     const double object_tolerance = 0.10; // 10 cm discontinuity tolerance
-    const double min_cluster_size = 0.14; // Minimum cluster size
-    const double max_cluster_size = 0.30; // Maximum cluster size
+    const double min_cluster_size = 0.27; // Minimum cluster size
+    const double max_cluster_size = 0.35; // Maximum cluster size
 
     geometry_msgs::msg::PoseArray cylinder_poses_; // Currently detected poses
 
