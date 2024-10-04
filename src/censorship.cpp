@@ -7,6 +7,7 @@
 #include "nav_msgs/msg/odometry.hpp"
 #include "std_msgs/msg/int32_multi_array.hpp"
 #include "geometry_msgs/msg/pose.hpp"
+#include "geometry_msgs/msg/pose_array.hpp"
 #include "sensor_msgs/msg/laser_scan.hpp"
 #include "sensor_msgs/msg/image.hpp"
 
@@ -17,11 +18,13 @@ protected:
 
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr scan_map_raw_pub_;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr scan_map_annotated_pub_;
-    rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr cylinder_position_pub_;
+    rclcpp::Publisher<geometry_msgs::msg::PoseArray>::SharedPtr cylinder_positions_pub_;
 
     const double object_tolerance = 0.05; // 5 cm discontinuity tolerance
     const double min_cluster_size = 0.14; // Minimum cluster size
     const double max_cluster_size = 0.15; // Maximum cluster size
+
+    geometry_msgs::msg::PoseArray cylinder_poses_; // Currently detected poses
 
 public:
     CensorMatic() : Node("task_planner") {
@@ -32,8 +35,10 @@ public:
 
         scan_map_raw_pub_ = this->create_publisher<sensor_msgs::msg::Image>("scan_map_raw", 10);
         scan_map_annotated_pub_ = this->create_publisher<sensor_msgs::msg::Image>("scan_map_annotated", 10);
-        cylinder_position_pub_ = this->create_publisher<geometry_msgs::msg::Pose>("cylinder_position", 10);
-    }
+        cylinder_positions_pub_ = this->create_publisher<geometry_msgs::msg::PoseArray>("cylinder_positions", 10);
+        cylinder_poses_.header.frame_id = "map";
+    
+}
 
 private:
     void odom_callback(const nav_msgs::msg::Odometry::SharedPtr msg) {
@@ -84,8 +89,19 @@ private:
                 thresholded_clusters.push_back(cluster);
                 double avg_angle = calculate_cluster_angle(msg, angle_db, cluster);
                 cluster_angles.push_back(avg_angle);
+                RCLCPP_INFO(this->get_logger(), "Size: %f", avg_angle);
+                // TODO reject based on curvature
+
+
+                // TODO determine center of cluster
+                double distance = msg->ranges[cluster.first];
+                double angle = msg->angle_min + cluster.first * msg->angle_increment;
+                double x = distance * std::cos(angle);
+                double y = distance * std::sin(angle);
+                append_cylinder_position(x, y);
             }
         }
+        publish_cylinders();
 
         RCLCPP_INFO(this->get_logger(), "Matches: %zu", thresholded_clusters.size());
     }
@@ -120,17 +136,23 @@ private:
         return sum_angles / length;
     }
 
-    void publish_cylinder_position(double x, double y) {
-        auto pose_msg = geometry_msgs::msg::Pose();
-        pose_msg.position.x = x;
-        pose_msg.position.y = y;
-        pose_msg.position.z = 0.0;
-        pose_msg.orientation.x = 0.0;
-        pose_msg.orientation.y = 0.0;
-        pose_msg.orientation.z = 0.0;
-        pose_msg.orientation.w = 1.0;
+    void append_cylinder_position(double x, double y) {
+        geometry_msgs::msg::Pose pose;
+        pose.position.x = x;
+        pose.position.y = y;
+        pose.position.z = 0.0;
+        pose.orientation.x = 0.0;
+        pose.orientation.y = 0.0;
+        pose.orientation.z = 0.0;
+        pose.orientation.w = 1.0;
 
-        cylinder_position_pub_->publish(pose_msg);
+        cylinder_poses_.poses.push_back(pose);
+    }
+
+    void publish_cylinders() {
+        cylinder_poses_.header.stamp = this->now();
+        cylinder_positions_pub_->publish(cylinder_poses_);
+        cylinder_poses_.poses.clear();
     }
 
     geometry_msgs::msg::Pose current_pose_;
