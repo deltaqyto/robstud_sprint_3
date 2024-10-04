@@ -22,7 +22,7 @@ protected:
 
     const double object_tolerance = 0.05; // 5 cm discontinuity tolerance
     const double min_cluster_size = 0.14; // Minimum cluster size
-    const double max_cluster_size = 0.15; // Maximum cluster size
+    const double max_cluster_size = 0.30; // Maximum cluster size
 
     geometry_msgs::msg::PoseArray cylinder_poses_; // Currently detected poses
 
@@ -36,7 +36,7 @@ public:
         scan_map_raw_pub_ = this->create_publisher<sensor_msgs::msg::Image>("scan_map_raw", 10);
         scan_map_annotated_pub_ = this->create_publisher<sensor_msgs::msg::Image>("scan_map_annotated", 10);
         cylinder_positions_pub_ = this->create_publisher<geometry_msgs::msg::PoseArray>("cylinder_positions", 10);
-        cylinder_poses_.header.frame_id = "map";
+        cylinder_poses_.header.frame_id = "/base_scan";
     
 }
 
@@ -84,12 +84,16 @@ private:
         std::vector<double> cluster_angles;
 
         for (const auto& cluster : clusters) {
-            RCLCPP_INFO(this->get_logger(), "Size: %zu", cluster.second);
+            if (cluster.second < 5) {  // Remove fragment items
+                continue;
+            }
+            //RCLCPP_INFO(this->get_logger(), "Size: %zu", cluster.second);
             if (check_cluster_threshold(msg, cluster)) {
                 thresholded_clusters.push_back(cluster);
                 double avg_angle = calculate_cluster_angle(msg, angle_db, cluster);
                 cluster_angles.push_back(avg_angle);
-                RCLCPP_INFO(this->get_logger(), "Size: %f", avg_angle);
+                //RCLCPP_INFO(this->get_logger(), "Size: %f", avg_angle);
+
                 // TODO reject based on curvature
 
 
@@ -99,6 +103,8 @@ private:
                 double x = distance * std::cos(angle);
                 double y = distance * std::sin(angle);
                 append_cylinder_position(x, y);
+                RCLCPP_INFO(this->get_logger(), "X:%f Y:%f", x, y);
+    
             }
         }
         publish_cylinders();
@@ -117,7 +123,7 @@ private:
         double x2 = scan->ranges[end] * std::cos(scan->angle_min + end * scan->angle_increment);
         double y2 = scan->ranges[end] * std::sin(scan->angle_min + end * scan->angle_increment);
         double cluster_size = std::sqrt(std::pow(x2 - x1, 2) + std::pow(y2 - y1, 2));
-
+        //RCLCPP_INFO(this->get_logger(), "Size: %f", cluster_size);
         return (cluster_size >= min_cluster_size && cluster_size <= max_cluster_size);
     }
 
@@ -150,9 +156,11 @@ private:
     }
 
     void publish_cylinders() {
+        append_cylinder_position(0, 0);
         cylinder_poses_.header.stamp = this->now();
         cylinder_positions_pub_->publish(cylinder_poses_);
         cylinder_poses_.poses.clear();
+        cylinder_poses_.header.frame_id = "/odom";
     }
 
     geometry_msgs::msg::Pose current_pose_;
