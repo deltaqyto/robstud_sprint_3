@@ -23,7 +23,8 @@ protected:
     rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr laser_sub_;
 
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr scan_map_raw_pub_;
-    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr scan_map_annotated_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr double_map_pub;
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr overlaid_map_pub_;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr raw_map_raw_pub_;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr raw_map_annotated_pub_;
     rclcpp::Publisher<geometry_msgs::msg::PoseArray>::SharedPtr cylinder_positions_pub_;
@@ -38,6 +39,7 @@ protected:
     const double meters_per_pixel = 0.01;
 
     geometry_msgs::msg::PoseArray cylinder_poses_; // Currently detected poses
+    cv::Mat lidar_image_;
 
 public:
     CensorMatic() : Node("task_planner") {
@@ -47,10 +49,13 @@ public:
             "scan", 10, std::bind(&CensorMatic::laser_callback, this, std::placeholders::_1));
 
         scan_map_raw_pub_ = this->create_publisher<sensor_msgs::msg::Image>("scan_map_raw", 10);
-        scan_map_annotated_pub_ = this->create_publisher<sensor_msgs::msg::Image>("scan_map_annotated", 10);
         raw_map_raw_pub_ = this->create_publisher<sensor_msgs::msg::Image>("raw_map_raw", 10);
         raw_map_annotated_pub_ = this->create_publisher<sensor_msgs::msg::Image>("raw_map_annotated", 10);
-        
+        overlaid_map_pub_ = this->create_publisher<sensor_msgs::msg::Image>("overlaid_map", 10);
+        double_map_pub = this->create_publisher<sensor_msgs::msg::Image>("map_comparison", 10);
+
+
+
         cylinder_positions_pub_ = this->create_publisher<geometry_msgs::msg::PoseArray>("cylinder_positions", 10);
         cylinder_poses_.header.frame_id = "/base_scan";
 
@@ -65,6 +70,7 @@ private:
     }
 
     void laser_callback(const sensor_msgs::msg::LaserScan::SharedPtr msg) {
+        make_lidar_mat(msg);
         std::vector<std::pair<size_t, size_t>> clusters;
         std::vector<double> angle_db;
         
@@ -149,6 +155,29 @@ private:
         RCLCPP_INFO(this->get_logger(), "Matches: %zu", thresholded_clusters.size());
     }
 
+    void make_lidar_mat(const sensor_msgs::msg::LaserScan::SharedPtr msg) {
+        int image_size = static_cast<int>(std::ceil(msg->range_max / meters_per_pixel)) * 2;
+        lidar_image_ = cv::Mat(image_size, image_size, CV_8UC1, cv::Scalar(0));  // Black image
+
+        int center = image_size / 2;
+
+        for (size_t i = 0; i < msg->ranges.size(); ++i) {
+            float range = msg->ranges[i];
+            
+            if (std::isnan(range) || std::isinf(range) || range < msg->range_min || range > msg->range_max) {
+                continue;
+            }
+
+            float angle = msg->angle_min + i * msg->angle_increment;
+            int x = static_cast<int>(std::round(range * std::cos(angle) / meters_per_pixel));
+            int y = static_cast<int>(std::round(range * std::sin(angle) / meters_per_pixel));
+
+            cv::circle(lidar_image_, cv::Point(center + x, center + y), 2, cv::Scalar(255), -1);
+        }
+
+        cv::flip(lidar_image_, lidar_image_, 0); // Flip for visual alignment
+    }
+
     void map_upload_callback(){
         cv::Mat map_image = get_map_image();
         sensor_msgs::msg::Image::SharedPtr msg = cv_bridge::CvImage(std_msgs::msg::Header(), "mono8", map_image).toImageMsg();
@@ -162,6 +191,19 @@ private:
         msg2->header.stamp = this->now();
         msg2->header.frame_id = "map";
         raw_map_annotated_pub_->publish(*msg2);
+
+        
+        cv::Mat overlay_image = overlay_images(transformed_image, lidar_image_);
+        sensor_msgs::msg::Image::SharedPtr msg3 = cv_bridge::CvImage(std_msgs::msg::Header(), "bgr8", overlay_image).toImageMsg();
+        msg3->header.stamp = this->now();
+        msg3->header.frame_id = "map";
+        overlaid_map_pub_->publish(*msg3);
+
+        //cv::Mat overlay_maps = overlay_images(transformed_image, scanned_map);
+        //sensor_msgs::msg::Image::SharedPtr msg4 = cv_bridge::CvImage(std_msgs::msg::Header(), "bgr8", overlay_maps).toImageMsg();
+        //msg4->header.stamp = this->now();
+        //msg4->header.frame_id = "map";
+        //double_map_pub->publish(*msg4);
     }
 
     cv::Mat transform_image(cv::Mat map_image, const geometry_msgs::msg::Pose& pose) {
@@ -183,6 +225,45 @@ private:
         cv::Mat transformed_image;
         cv::warpAffine(map_image, transformed_image, rot_mat, map_image.size(), cv::INTER_LINEAR, cv::BORDER_CONSTANT, cv::Scalar(205));
         return transformed_image;
+    }
+
+    cv::Mat overlay_images(const cv::Mat& img1, const cv::Mat& img2) {
+        int max_width = std::max(img1.cols, img2.cols);
+        int max_height = std::max(img1.rows, img2.rows);
+
+        // Pad uncovered regions in dim blue
+        cv::Mat output(max_height, max_width, CV_8UC3, cv::Scalar(0, 0, 50));
+
+        // Helper to overlay on a channel
+        auto overlay_channel = [&](const cv::Mat& img, int channel) {
+            if (img.empty()) return;
+
+            cv::Mat resized;
+            if (img.type() == CV_8UC1) {
+                resized = img;
+            } else if (img.type() == CV_8UC3) {
+                cv::cvtColor(img, resized, cv::COLOR_BGR2GRAY);
+            } else {
+                RCLCPP_WARN(this->get_logger(), "Odd image type");
+                return;
+            }
+
+            int x_offset = (max_width - img.cols) / 2;
+            int y_offset = (max_height - img.rows) / 2;
+
+            cv::Mat roi(output, cv::Rect(x_offset, y_offset, img.cols, img.rows));
+            cv::Mat overlay_channel(roi.size(), CV_8UC3, cv::Scalar(0, 0, 0));
+            overlay_channel.forEach<cv::Vec3b>([&](cv::Vec3b& pixel, const int position[]) -> void {
+                pixel[channel] = resized.at<uchar>(position[0], position[1]);
+            });
+            cv::add(roi, overlay_channel, roi);
+        };
+
+        
+        overlay_channel(img1, 2);
+        overlay_channel(img2, 1);
+
+        return output;
     }
 
     bool check_cluster_threshold(const sensor_msgs::msg::LaserScan::SharedPtr& scan,
