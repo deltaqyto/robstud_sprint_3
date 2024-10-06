@@ -10,6 +10,7 @@
 #include "geometry_msgs/msg/pose_array.hpp"
 #include "sensor_msgs/msg/laser_scan.hpp"
 #include "sensor_msgs/msg/image.hpp"
+#include "nav_msgs/msg/occupancy_grid.hpp"
 #include "tf2/utils.h"
 #include "ament_index_cpp/get_package_share_directory.hpp"
 
@@ -21,6 +22,7 @@ class CensorMatic : public rclcpp::Node {
 protected:
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
     rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr laser_sub_;
+    rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr map_sub_;
 
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr scan_map_raw_pub_;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr double_map_pub;
@@ -40,6 +42,7 @@ protected:
 
     geometry_msgs::msg::PoseArray cylinder_poses_; // Currently detected poses
     cv::Mat lidar_image_;
+    cv::Mat scanned_image_;
 
 public:
     CensorMatic() : Node("task_planner") {
@@ -47,6 +50,9 @@ public:
             "odom", 10, std::bind(&CensorMatic::odom_callback, this, std::placeholders::_1));
         laser_sub_ = this->create_subscription<sensor_msgs::msg::LaserScan>(
             "scan", 10, std::bind(&CensorMatic::laser_callback, this, std::placeholders::_1));
+         map_sub_ = this->create_subscription<nav_msgs::msg::OccupancyGrid>(
+            "map", 10, std::bind(&CensorMatic::map_callback, this, std::placeholders::_1));
+
 
         scan_map_raw_pub_ = this->create_publisher<sensor_msgs::msg::Image>("scan_map_raw", 10);
         raw_map_raw_pub_ = this->create_publisher<sensor_msgs::msg::Image>("raw_map_raw", 10);
@@ -67,6 +73,58 @@ public:
 private:
     void odom_callback(const nav_msgs::msg::Odometry::SharedPtr msg) {
         current_pose_ = msg->pose.pose;
+    }
+    
+    void map_callback(const nav_msgs::msg::OccupancyGrid::SharedPtr msg) {
+        int width = msg->info.width;
+        int height = msg->info.height;
+        double resolution = msg->info.resolution;
+
+        cv::Mat temp_map(height, width, CV_8UC1, cv::Scalar(0));
+
+        for (int y = 0; y < height; ++y) {
+            for (int x = 0; x < width; ++x) {
+                int index = y * width + x;
+                if (msg->data[index] > 50) {  
+                    temp_map.at<uchar>(height - 1 - y, x) = 255;                }
+            }
+        }
+
+        double scale_factor = resolution / meters_per_pixel;
+
+        int new_width = static_cast<int>(std::ceil(width * scale_factor));
+        int new_height = static_cast<int>(std::ceil(height * scale_factor));
+
+        cv::Mat resized_map;
+        cv::resize(temp_map, resized_map, cv::Size(new_width, new_height), 0, 0, cv::INTER_NEAREST);
+
+        double offset_x = (msg->info.origin.position.x - image_origin_x) / meters_per_pixel;
+        double offset_y = (msg->info.origin.position.y - image_origin_y) / meters_per_pixel;
+
+        int min_x = static_cast<int>(std::floor(std::min(0.0, offset_x)));
+        int min_y = static_cast<int>(std::floor(std::min(0.0, offset_y)));
+        int max_x = static_cast<int>(std::ceil(std::max(static_cast<double>(new_width), offset_x + new_width)));
+        int max_y = static_cast<int>(std::ceil(std::max(static_cast<double>(new_height), offset_y + new_height)));
+
+        int final_width = max_x - min_x;
+        int final_height = max_y - min_y;
+
+        cv::Mat final_map(final_height, final_width, CV_8UC1, cv::Scalar(0));
+
+        int roi_x = static_cast<int>(offset_x) - min_x;
+        int roi_y = final_height - new_height - (static_cast<int>(offset_y) - min_y);
+
+        cv::Rect roi(roi_x, roi_y, new_width, new_height);
+        resized_map.copyTo(final_map(roi));
+
+        scanned_image_ = final_map;
+        sensor_msgs::msg::Image::SharedPtr img_msg = cv_bridge::CvImage(std_msgs::msg::Header(), "mono8", scanned_image_).toImageMsg();
+        img_msg->header.stamp = this->now();
+        img_msg->header.frame_id = "map";
+        scan_map_raw_pub_->publish(*img_msg);
+
+        RCLCPP_INFO(this->get_logger(), "Updated map: %dx%d, Origin offset: (%d, %d)", 
+                    scanned_image_.cols, scanned_image_.rows, -min_x, -min_y);
     }
 
     void laser_callback(const sensor_msgs::msg::LaserScan::SharedPtr msg) {
@@ -199,11 +257,11 @@ private:
         msg3->header.frame_id = "map";
         overlaid_map_pub_->publish(*msg3);
 
-        //cv::Mat overlay_maps = overlay_images(transformed_image, scanned_map);
-        //sensor_msgs::msg::Image::SharedPtr msg4 = cv_bridge::CvImage(std_msgs::msg::Header(), "bgr8", overlay_maps).toImageMsg();
-        //msg4->header.stamp = this->now();
-        //msg4->header.frame_id = "map";
-        //double_map_pub->publish(*msg4);
+        cv::Mat overlay_maps = overlay_images(map_image, scanned_image_);
+        sensor_msgs::msg::Image::SharedPtr msg4 = cv_bridge::CvImage(std_msgs::msg::Header(), "bgr8", overlay_maps).toImageMsg();
+        msg4->header.stamp = this->now();
+        msg4->header.frame_id = "map";
+        double_map_pub->publish(*msg4);
     }
 
     cv::Mat transform_image(cv::Mat map_image, const geometry_msgs::msg::Pose& pose) {
