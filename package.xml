@@ -24,5 +24,8 @@
 
   <export>
     <build_type>ament_cmake</build_type>
+    <data_files>
+    data/map.pgm
+  </data_files>
   </export>
 </package>

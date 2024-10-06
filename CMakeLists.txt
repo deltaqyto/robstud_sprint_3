@@ -19,9 +19,11 @@ find_package(nav_msgs REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(cv_bridge REQUIRED)
 find_package(tf2 REQUIRED)
+find_package(ament_index_cpp REQUIRED)
+
 
 add_executable(censorship src/censorship.cpp)
-ament_target_dependencies(censorship rclcpp tf2 nav_msgs std_msgs sensor_msgs geometry_msgs OpenCV cv_bridge)
+ament_target_dependencies(censorship ${ament_index_cpp_LIBRARIES} rclcpp tf2 nav_msgs std_msgs sensor_msgs geometry_msgs OpenCV cv_bridge)
 
 install(TARGETS
   censorship
@@ -30,6 +32,7 @@ install(TARGETS
 
 install(DIRECTORY
   launch
+  data
   DESTINATION share/${PROJECT_NAME}/
   )
   

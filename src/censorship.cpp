@@ -11,6 +11,11 @@
 #include "sensor_msgs/msg/laser_scan.hpp"
 #include "sensor_msgs/msg/image.hpp"
 #include "tf2/utils.h"
+#include "ament_index_cpp/get_package_share_directory.hpp"
+
+
+#include <opencv2/opencv.hpp>
+#include <cv_bridge/cv_bridge.h>
 
 class CensorMatic : public rclcpp::Node {
 protected:
@@ -19,7 +24,10 @@ protected:
 
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr scan_map_raw_pub_;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr scan_map_annotated_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr raw_map_raw_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr raw_map_annotated_pub_;
     rclcpp::Publisher<geometry_msgs::msg::PoseArray>::SharedPtr cylinder_positions_pub_;
+    rclcpp::TimerBase::SharedPtr map_upload_timer;
 
     const double object_tolerance = 0.10; // 10 cm discontinuity tolerance
     const double min_cluster_size = 0.27; // Minimum cluster size
@@ -36,9 +44,15 @@ public:
 
         scan_map_raw_pub_ = this->create_publisher<sensor_msgs::msg::Image>("scan_map_raw", 10);
         scan_map_annotated_pub_ = this->create_publisher<sensor_msgs::msg::Image>("scan_map_annotated", 10);
+        raw_map_raw_pub_ = this->create_publisher<sensor_msgs::msg::Image>("raw_map_raw", 10);
+        raw_map_annotated_pub_ = this->create_publisher<sensor_msgs::msg::Image>("raw_map_annotated", 10);
+        
         cylinder_positions_pub_ = this->create_publisher<geometry_msgs::msg::PoseArray>("cylinder_positions", 10);
         cylinder_poses_.header.frame_id = "/base_scan";
-    
+
+        map_upload_timer = this->create_wall_timer(
+                                                   std::chrono::seconds(1),
+                                                   std::bind(&CensorMatic::map_upload_callback, this));    
 }
 
 private:
@@ -103,8 +117,8 @@ private:
                 }
                 //RCLCPP_INFO(this->get_logger(), "Curvature: %f", avg_angle);
 
-                double distance = msg->ranges[cluster.first];
-                double angle = msg->angle_min + cluster.first * msg->angle_increment;
+                //double distance = msg->ranges[cluster.first];
+                //double angle = msg->angle_min + cluster.first * msg->angle_increment;
                 double x = center_x; //distance * std::cos(angle);
                 double y = center_y; //distance * std::sin(angle);
 
@@ -129,6 +143,16 @@ private:
         publish_cylinders();
 
         RCLCPP_INFO(this->get_logger(), "Matches: %zu", thresholded_clusters.size());
+    }
+
+    void map_upload_callback(){
+        cv::Mat map_image = get_map_image();
+        sensor_msgs::msg::Image::SharedPtr msg = cv_bridge::CvImage(std_msgs::msg::Header(), "mono8", map_image).toImageMsg();
+        msg->header.stamp = this->now();
+        msg->header.frame_id = "map";
+        raw_map_raw_pub_->publish(*msg);
+
+
     }
 
     bool check_cluster_threshold(const sensor_msgs::msg::LaserScan::SharedPtr& scan,
@@ -184,6 +208,20 @@ private:
         cylinder_positions_pub_->publish(cylinder_poses_);
         cylinder_poses_.poses.clear();
         cylinder_poses_.header.frame_id = "/odom";
+    }
+
+     cv::Mat get_map_image() {
+        std::string package_name = "robstud_sprint_3";
+        std::string package_share_directory = ament_index_cpp::get_package_share_directory(package_name);
+        std::string map_path = package_share_directory + "/data/map.pgm";
+        
+        cv::Mat map_image = cv::imread(map_path, cv::IMREAD_GRAYSCALE);
+        if (map_image.empty()) {
+            RCLCPP_ERROR(this->get_logger(), "Failed to load map image from %s", map_path.c_str());
+        } else {
+            //RCLCPP_INFO(this->get_logger(), "Got map from %s", map_path.c_str());
+        }
+        return map_image;
     }
 
     geometry_msgs::msg::Pose current_pose_;
