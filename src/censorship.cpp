@@ -33,6 +33,10 @@ protected:
     const double min_cluster_size = 0.27; // Minimum cluster size
     const double max_cluster_size = 0.35; // Maximum cluster size
 
+    const double image_origin_x = -7.0;
+    const double image_origin_y = -7.0;
+    const double meters_per_pixel = 0.01;
+
     geometry_msgs::msg::PoseArray cylinder_poses_; // Currently detected poses
 
 public:
@@ -51,7 +55,7 @@ public:
         cylinder_poses_.header.frame_id = "/base_scan";
 
         map_upload_timer = this->create_wall_timer(
-                                                   std::chrono::seconds(1),
+                                                   std::chrono::milliseconds(20),
                                                    std::bind(&CensorMatic::map_upload_callback, this));    
 }
 
@@ -152,7 +156,33 @@ private:
         msg->header.frame_id = "map";
         raw_map_raw_pub_->publish(*msg);
 
+        cv::Mat transformed_image = transform_image(map_image, current_pose_);
 
+        sensor_msgs::msg::Image::SharedPtr msg2 = cv_bridge::CvImage(std_msgs::msg::Header(), "mono8", transformed_image).toImageMsg();
+        msg2->header.stamp = this->now();
+        msg2->header.frame_id = "map";
+        raw_map_annotated_pub_->publish(*msg2);
+    }
+
+    cv::Mat transform_image(cv::Mat map_image, const geometry_msgs::msg::Pose& pose) {
+        double pose_x = pose.position.x;
+        double pose_y = pose.position.y;
+        tf2::Quaternion q(
+                    pose.orientation.x, pose.orientation.y,
+                    pose.orientation.z, pose.orientation.w);
+        double yaw = tf2::getYaw(q);
+
+        int center_x = static_cast<int>((pose_x - image_origin_x) / meters_per_pixel);
+        int center_y = map_image.rows - static_cast<int>((pose_y - image_origin_y) / meters_per_pixel);
+
+        cv::Mat rot_mat = cv::getRotationMatrix2D(cv::Point2f(center_x, center_y), -yaw * 180 / M_PI, 1.0);
+
+        rot_mat.at<double>(0,2) += map_image.cols/2 - center_x;
+        rot_mat.at<double>(1,2) += map_image.rows/2 - center_y;
+
+        cv::Mat transformed_image;
+        cv::warpAffine(map_image, transformed_image, rot_mat, map_image.size(), cv::INTER_LINEAR, cv::BORDER_CONSTANT, cv::Scalar(205));
+        return transformed_image;
     }
 
     bool check_cluster_threshold(const sensor_msgs::msg::LaserScan::SharedPtr& scan,
