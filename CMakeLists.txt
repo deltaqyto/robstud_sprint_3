@@ -24,9 +24,12 @@ find_package(ament_index_cpp REQUIRED)
 
 add_executable(censorship src/censorship.cpp)
 ament_target_dependencies(censorship ${ament_index_cpp_LIBRARIES} rclcpp tf2 nav_msgs std_msgs sensor_msgs geometry_msgs OpenCV cv_bridge)
+add_executable(map_server src/map_server.cpp)
+ament_target_dependencies(map_server ${ament_index_cpp_LIBRARIES} rclcpp tf2 nav_msgs std_msgs sensor_msgs geometry_msgs OpenCV cv_bridge)
 
 install(TARGETS
   censorship
+  map_server
   DESTINATION lib/${PROJECT_NAME}/
   )
 
