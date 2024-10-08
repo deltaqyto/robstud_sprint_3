@@ -7,6 +7,10 @@
 #include <tf2_ros/static_transform_broadcaster.h>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 
+/**
+ * @class MapServer
+ * @brief Streamlined elper to perform image overlaying for task 3.2. Deprecated
+ */
 class MapServer : public rclcpp::Node {
 public:
     double map_x = -7;
