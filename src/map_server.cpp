@@ -4,6 +4,8 @@
 #include <cv_bridge/cv_bridge.h>
 #include <opencv2/opencv.hpp>
 #include <ament_index_cpp/get_package_share_directory.hpp>
+#include <tf2_ros/static_transform_broadcaster.h>
+#include <geometry_msgs/msg/transform_stamped.hpp>
 
 class MapServer : public rclcpp::Node {
 public:
@@ -18,8 +20,9 @@ public:
         map_sub_ = this->create_subscription<nav_msgs::msg::OccupancyGrid>(
             "map", 10, std::bind(&MapServer::map_callback, this, std::placeholders::_1));
         map_publish_timer_ = this->create_wall_timer(
-            std::chrono::milliseconds(20),
+            std::chrono::milliseconds(10),
             std::bind(&MapServer::publish_map, this));
+        tf_broadcaster_ = std::make_unique<tf2_ros::StaticTransformBroadcaster>(this);
         load_map();
     }
 
@@ -29,6 +32,7 @@ private:
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr overlay_map_pub_;
     rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr map_sub_;
     rclcpp::TimerBase::SharedPtr map_publish_timer_;
+    std::unique_ptr<tf2_ros::StaticTransformBroadcaster> tf_broadcaster_;
     cv::Mat map_image_;
     cv::Mat subscribed_map_image_;
     nav_msgs::msg::OccupancyGrid occupancy_map_;
@@ -108,6 +112,7 @@ private:
     }
 
     void publish_map() {
+        //publish_static_transform();
         if (!map_image_.empty()) {
             occupancy_map_.header.stamp = this->now();
             occupancy_map_pub_->publish(occupancy_map_);
@@ -126,6 +131,22 @@ private:
                 overlay_map_pub_->publish(*overlay_msg);
             }
         }
+    }
+
+    void publish_static_transform() {
+        geometry_msgs::msg::TransformStamped t;
+        t.header.stamp = this->now();
+        t.header.frame_id = "map";
+        t.child_frame_id = "odom";
+        t.transform.translation.x = 0.0;
+        t.transform.translation.y = 0.0;
+        t.transform.translation.z = 0.0;
+        t.transform.rotation.x = 0.0;
+        t.transform.rotation.y = 0.0;
+        t.transform.rotation.z = 0.0;
+        t.transform.rotation.w = 1.0;
+
+        tf_broadcaster_->sendTransform(t);
     }
 };
 

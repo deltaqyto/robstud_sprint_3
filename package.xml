@@ -21,6 +21,7 @@
   <depend>cv_bridge</depend>
   <depend>tf2</depend>
   <depend>ament_index_cpp</depend>
+  <depend>tf2_ros</depend>
 
   <export>
     <build_type>ament_cmake</build_type>

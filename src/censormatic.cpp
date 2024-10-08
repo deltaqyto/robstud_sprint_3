@@ -1,57 +1,17 @@
-#include <unordered_map>
-#include <queue>
-#include <stdexcept>
-#include <optional>
-#include <cmath>
+/**
+ * @file censormatic.cpp
+ * @brief Bag of tricks to perform 3.2 and 3.6 tasks
+ */
+#include "censormatic.h"
 #include "rclcpp/rclcpp.hpp"
-#include "nav_msgs/msg/odometry.hpp"
-#include "std_msgs/msg/int32_multi_array.hpp"
-#include "geometry_msgs/msg/pose.hpp"
-#include "geometry_msgs/msg/pose_array.hpp"
-#include "sensor_msgs/msg/laser_scan.hpp"
-#include "sensor_msgs/msg/image.hpp"
-#include "nav_msgs/msg/occupancy_grid.hpp"
-#include "tf2/utils.h"
-#include "ament_index_cpp/get_package_share_directory.hpp"
 
-
-#include <opencv2/opencv.hpp>
-#include <cv_bridge/cv_bridge.h>
-
-class CensorMatic : public rclcpp::Node {
-protected:
-    rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
-    rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr laser_sub_;
-    rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr map_sub_;
-
-    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr scan_map_raw_pub_;
-    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr double_map_pub;
-    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr overlaid_map_pub_;
-    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr raw_map_raw_pub_;
-    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr raw_map_annotated_pub_;
-    rclcpp::Publisher<geometry_msgs::msg::PoseArray>::SharedPtr cylinder_positions_pub_;
-    rclcpp::TimerBase::SharedPtr map_upload_timer;
-
-    const double object_tolerance = 0.10; // 10 cm discontinuity tolerance
-    const double min_cluster_size = 0.27; // Minimum cluster size
-    const double max_cluster_size = 0.35; // Maximum cluster size
-
-    const double image_origin_x = -7.0;
-    const double image_origin_y = -7.0;
-    const double meters_per_pixel = 0.01;
-
-    geometry_msgs::msg::PoseArray cylinder_poses_; // Currently detected poses
-    cv::Mat lidar_image_;
-    cv::Mat scanned_image_;
-
-public:
-    CensorMatic() : Node("task_planner") {
+CylinderIdentifier::CylinderIdentifier() : Node("task_planner") {
         odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
-            "odom", 10, std::bind(&CensorMatic::odom_callback, this, std::placeholders::_1));
+            "odom", 10, std::bind(&CylinderIdentifier::odom_callback, this, std::placeholders::_1));
         laser_sub_ = this->create_subscription<sensor_msgs::msg::LaserScan>(
-            "scan", 10, std::bind(&CensorMatic::laser_callback, this, std::placeholders::_1));
+            "scan", 10, std::bind(&CylinderIdentifier::laser_callback, this, std::placeholders::_1));
          map_sub_ = this->create_subscription<nav_msgs::msg::OccupancyGrid>(
-            "map", 10, std::bind(&CensorMatic::map_callback, this, std::placeholders::_1));
+            "map", 10, std::bind(&CylinderIdentifier::map_callback, this, std::placeholders::_1));
 
 
         scan_map_raw_pub_ = this->create_publisher<sensor_msgs::msg::Image>("scan_map_raw", 10);
@@ -67,15 +27,16 @@ public:
 
         map_upload_timer = this->create_wall_timer(
                                                    std::chrono::milliseconds(20),
-                                                   std::bind(&CensorMatic::map_upload_callback, this));    
+                                                   std::bind(&CylinderIdentifier::map_upload_callback, this));    
 }
 
-private:
-    void odom_callback(const nav_msgs::msg::Odometry::SharedPtr msg) {
+   
+    void CylinderIdentifier::odom_callback(const nav_msgs::msg::Odometry::SharedPtr msg) {
         current_pose_ = msg->pose.pose;
     }
     
-    void map_callback(const nav_msgs::msg::OccupancyGrid::SharedPtr msg) {
+  
+    void CylinderIdentifier::map_callback(const nav_msgs::msg::OccupancyGrid::SharedPtr msg) {
         int width = msg->info.width;
         int height = msg->info.height;
         double resolution = msg->info.resolution;
@@ -127,7 +88,8 @@ private:
                     scanned_image_.cols, scanned_image_.rows, -min_x, -min_y);
     }
 
-    void laser_callback(const sensor_msgs::msg::LaserScan::SharedPtr msg) {
+   
+    void CylinderIdentifier::laser_callback(const sensor_msgs::msg::LaserScan::SharedPtr msg) {
         make_lidar_mat(msg);
         std::vector<std::pair<size_t, size_t>> clusters;
         std::vector<double> angle_db;
@@ -213,7 +175,8 @@ private:
         RCLCPP_INFO(this->get_logger(), "Matches: %zu", thresholded_clusters.size());
     }
 
-    void make_lidar_mat(const sensor_msgs::msg::LaserScan::SharedPtr msg) {
+  
+    void CylinderIdentifier::make_lidar_mat(const sensor_msgs::msg::LaserScan::SharedPtr msg) {
         int image_size = static_cast<int>(std::ceil(msg->range_max / meters_per_pixel)) * 2;
         lidar_image_ = cv::Mat(image_size, image_size, CV_8UC1, cv::Scalar(0));  // Black image
 
@@ -236,7 +199,8 @@ private:
         cv::flip(lidar_image_, lidar_image_, 0); // Flip for visual alignment
     }
 
-    void map_upload_callback(){
+
+    void CylinderIdentifier::map_upload_callback(){
         cv::Mat map_image = get_map_image();
         sensor_msgs::msg::Image::SharedPtr msg = cv_bridge::CvImage(std_msgs::msg::Header(), "mono8", map_image).toImageMsg();
         msg->header.stamp = this->now();
@@ -264,7 +228,8 @@ private:
         double_map_pub->publish(*msg4);
     }
 
-    cv::Mat transform_image(cv::Mat map_image, const geometry_msgs::msg::Pose& pose) {
+  
+    cv::Mat CylinderIdentifier::transform_image(cv::Mat map_image, const geometry_msgs::msg::Pose& pose) {
         double pose_x = pose.position.x;
         double pose_y = pose.position.y;
         tf2::Quaternion q(
@@ -285,7 +250,8 @@ private:
         return transformed_image;
     }
 
-    cv::Mat overlay_images(const cv::Mat& img1, const cv::Mat& img2) {
+   
+    cv::Mat CylinderIdentifier::overlay_images(const cv::Mat& img1, const cv::Mat& img2) {
         int max_width = std::max(img1.cols, img2.cols);
         int max_height = std::max(img1.rows, img2.rows);
 
@@ -324,7 +290,8 @@ private:
         return output;
     }
 
-    bool check_cluster_threshold(const sensor_msgs::msg::LaserScan::SharedPtr& scan,
+   
+    bool CylinderIdentifier::check_cluster_threshold(const sensor_msgs::msg::LaserScan::SharedPtr& scan,
                                  const std::pair<size_t, size_t>& cluster, 
                                  double& size, double& center_x, double& center_y) {
         size_t start = cluster.first;
@@ -344,7 +311,8 @@ private:
         return (cluster_size >= min_cluster_size && cluster_size <= max_cluster_size);
     }
 
-    double calculate_cluster_angle(const sensor_msgs::msg::LaserScan::SharedPtr& scan,
+  
+    double CylinderIdentifier::calculate_cluster_angle(const sensor_msgs::msg::LaserScan::SharedPtr& scan,
                                    const std::vector<double>& angle_db,
                                    const std::pair<size_t, size_t>& cluster) {
         size_t start = cluster.first;
@@ -359,7 +327,8 @@ private:
         return sum_angles / length;
     }
 
-    void append_cylinder_position(double x, double y) {
+ 
+    void CylinderIdentifier::append_cylinder_position(double x, double y) {
         geometry_msgs::msg::Pose pose;
         pose.position.x = x;
         pose.position.y = y;
@@ -372,14 +341,14 @@ private:
         cylinder_poses_.poses.push_back(pose);
     }
 
-    void publish_cylinders() {
+    void CylinderIdentifier::publish_cylinders() {
         cylinder_poses_.header.stamp = this->now();
         cylinder_positions_pub_->publish(cylinder_poses_);
         cylinder_poses_.poses.clear();
         cylinder_poses_.header.frame_id = "/odom";
     }
-
-     cv::Mat get_map_image() {
+  
+     cv::Mat CylinderIdentifier::get_map_image() {
         std::string package_name = "robstud_sprint_3";
         std::string package_share_directory = ament_index_cpp::get_package_share_directory(package_name);
         std::string map_path = package_share_directory + "/data/map.pgm";
@@ -393,13 +362,3 @@ private:
         return map_image;
     }
 
-    geometry_msgs::msg::Pose current_pose_;
-};
-
-int main(int argc, char* argv[]) {
-    rclcpp::init(argc, argv);
-    auto node = std::make_shared<CensorMatic>();
-    rclcpp::spin(node);
-    rclcpp::shutdown();
-    return 0;
-}
