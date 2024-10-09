@@ -40,8 +40,8 @@ protected:
     rclcpp::TimerBase::SharedPtr map_upload_timer;
 
     const double object_tolerance = 0.10; // 10 cm discontinuity tolerance
-    const double min_cluster_size = 0.27; // Minimum cluster size
-    const double max_cluster_size = 0.35; // Maximum cluster size
+    const double min_cluster_size = 0.1; // Minimum cluster size
+    const double max_cluster_size = 0.4; // Maximum cluster size
 
     const double image_origin_x = -7.0;
     const double image_origin_y = -7.0;

@@ -140,12 +140,13 @@ CylinderIdentifier::CylinderIdentifier() : Node("task_planner") {
                 thresholded_clusters.push_back(cluster);
                 double avg_angle = calculate_cluster_angle(msg, angle_db, cluster);
                 cluster_angles.push_back(avg_angle);
-                
+                RCLCPP_INFO(this->get_logger(), "Curvature: %f", avg_angle);
+
                 // TODO reject based on curvature
                 if (isnan(avg_angle) || isinf(avg_angle)) {
-                    continue;
+                    //continue;
                 }
-                //RCLCPP_INFO(this->get_logger(), "Curvature: %f", avg_angle);
+                RCLCPP_INFO(this->get_logger(), "Curvature: %f", avg_angle);
 
                 //double distance = msg->ranges[cluster.first];
                 //double angle = msg->angle_min + cluster.first * msg->angle_increment;
@@ -304,6 +305,8 @@ CylinderIdentifier::CylinderIdentifier() : Node("task_planner") {
         double y2 = scan->ranges[end] * std::sin(scan->angle_min + end * scan->angle_increment);
         double cluster_size = std::sqrt(std::pow(x2 - x1, 2) + std::pow(y2 - y1, 2));
         size = cluster_size;
+        //RCLCPP_INFO(this->get_logger(), "Size of cluster %f rad %f", cluster_size, );
+        //RCLCPP_INFO(this->get_logger(), " of cluster %f", cluster_size);
 
         center_x = (x1 + x2)/2.0;
         center_y = (y1 + y2)/2.0;
